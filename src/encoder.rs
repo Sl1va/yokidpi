@@ -1,4 +1,5 @@
-use std::{cell::RefCell, io::Write};
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use rand::Rng;
 
@@ -7,6 +8,22 @@ pub trait Encoder {
     fn decode(&self, buf: Vec<u8>) -> Vec<u8> {
         // by default assume that the operations are symmetric
         self.encode(buf)
+    }
+}
+
+pub struct Decoder {
+    encoder: Rc<Box<dyn Encoder>>,
+}
+
+impl Decoder {
+    pub fn new(encoder: Rc<Box<dyn Encoder>>) -> Self {
+        Decoder { encoder }
+    }
+}
+
+impl Encoder for Decoder {
+    fn encode(&self, buf: Vec<u8>) -> Vec<u8> {
+        self.encoder.decode(buf)
     }
 }
 
@@ -70,12 +87,15 @@ pub struct SizeExtender {
 }
 
 impl SizeExtender {
-    fn new(factor: f64) -> Self {
+    pub fn new(factor: f64) -> Self {
         if factor <= 1.0f64 {
             panic!("Factor can not be less or equal to 1.0");
         }
         let random = rand::thread_rng();
-        SizeExtender { random: RefCell::new(random), factor }
+        SizeExtender {
+            random: RefCell::new(random),
+            factor,
+        }
     }
 }
 
@@ -128,6 +148,12 @@ fn test_size_extender_decode() {
 
 pub struct NeighbourBlockSwapper {
     block_size: usize,
+}
+
+impl NeighbourBlockSwapper {
+    pub fn new(block_size: usize) -> Self {
+        Self {block_size}
+    }
 }
 
 impl Encoder for NeighbourBlockSwapper {
@@ -237,11 +263,11 @@ pub struct EncoderChain {
 }
 
 impl EncoderChain {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self { chain: Vec::new() }
     }
 
-    fn add(&mut self, encoder: Box<dyn Encoder>) {
+    pub fn add(&mut self, encoder: Box<dyn Encoder>) {
         self.chain.push(encoder);
     }
 }
