@@ -1,8 +1,10 @@
+use std::{cell::RefCell, io::Write};
+
 use rand::Rng;
 
 pub trait Encoder {
-    fn encode(&mut self, buf: Vec<u8>) -> Vec<u8>;
-    fn decode(&mut self, buf: Vec<u8>) -> Vec<u8> {
+    fn encode(&self, buf: Vec<u8>) -> Vec<u8>;
+    fn decode(&self, buf: Vec<u8>) -> Vec<u8> {
         // by default assume that the operations are symmetric
         self.encode(buf)
     }
@@ -11,7 +13,7 @@ pub trait Encoder {
 pub struct ByteReverser {}
 
 impl Encoder for ByteReverser {
-    fn encode(&mut self, mut buf: Vec<u8>) -> Vec<u8> {
+    fn encode(&self, mut buf: Vec<u8>) -> Vec<u8> {
         let len = buf.len();
         for i in 0..len / 2 {
             buf.swap(i, len - 1 - i);
@@ -24,7 +26,7 @@ impl Encoder for ByteReverser {
 
 #[test]
 fn test_byte_reverser_encode_even() {
-    let mut byte_reverser = ByteReverser {};
+    let byte_reverser = ByteReverser {};
     let mut buf = vec![1, 2, 3, 4];
 
     buf = byte_reverser.encode(buf);
@@ -33,7 +35,7 @@ fn test_byte_reverser_encode_even() {
 
 #[test]
 fn test_byte_reverser_decode_even() {
-    let mut byte_reverser = ByteReverser {};
+    let byte_reverser = ByteReverser {};
     let mut buf = vec![1, 2, 3, 4];
 
     buf = byte_reverser.encode(buf);
@@ -44,7 +46,7 @@ fn test_byte_reverser_decode_even() {
 
 #[test]
 fn test_byte_reverser_encode_odd() {
-    let mut byte_reverser = ByteReverser {};
+    let byte_reverser = ByteReverser {};
     let mut buf = vec![1, 2, 3, 4, 5];
 
     buf = byte_reverser.encode(buf);
@@ -53,7 +55,7 @@ fn test_byte_reverser_encode_odd() {
 
 #[test]
 fn test_byte_reverser_decode_odd() {
-    let mut byte_reverser = ByteReverser {};
+    let byte_reverser = ByteReverser {};
     let mut buf = vec![1, 2, 3, 4, 5];
 
     buf = byte_reverser.encode(buf);
@@ -63,7 +65,7 @@ fn test_byte_reverser_decode_odd() {
 }
 
 pub struct SizeExtender {
-    random: rand::rngs::ThreadRng,
+    random: RefCell<rand::rngs::ThreadRng>,
     factor: f64,
 }
 
@@ -73,25 +75,25 @@ impl SizeExtender {
             panic!("Factor can not be less or equal to 1.0");
         }
         let random = rand::thread_rng();
-        SizeExtender { random, factor }
+        SizeExtender { random: RefCell::new(random), factor }
     }
 }
 
 impl Encoder for SizeExtender {
-    fn encode(&mut self, buf: Vec<u8>) -> Vec<u8> {
+    fn encode(&self, buf: Vec<u8>) -> Vec<u8> {
         let newsize = ((buf.len() as f64) * self.factor).floor() as usize;
         let mut newbuf: Vec<u8> = Vec::from((buf.len() as u32).to_le_bytes());
 
         newbuf.extend(buf);
 
         while newbuf.len() < newsize as usize {
-            newbuf.push(self.random.gen_range(0..256) as u8);
+            newbuf.push(self.random.borrow_mut().gen_range(0..256) as u8);
         }
 
         newbuf
     }
 
-    fn decode(&mut self, buf: Vec<u8>) -> Vec<u8> {
+    fn decode(&self, buf: Vec<u8>) -> Vec<u8> {
         let oldsize = u32::from_le_bytes((&buf[0..4]).try_into().unwrap());
         (&buf[4..oldsize as usize + 4]).to_vec()
     }
@@ -105,7 +107,7 @@ fn test_size_extender_panic() {
 
 #[test]
 fn test_size_extender_encode() {
-    let mut extender = SizeExtender::new(1.8);
+    let extender = SizeExtender::new(1.8);
     let mut buf = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
     buf = extender.encode(buf);
@@ -116,7 +118,7 @@ fn test_size_extender_encode() {
 
 #[test]
 fn test_size_extender_decode() {
-    let mut extender = SizeExtender::new(1.8);
+    let extender = SizeExtender::new(1.8);
     let mut buf = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
     buf = extender.encode(buf);
@@ -129,7 +131,7 @@ pub struct NeighbourBlockSwapper {
 }
 
 impl Encoder for NeighbourBlockSwapper {
-    fn encode(&mut self, mut buf: Vec<u8>) -> Vec<u8> {
+    fn encode(&self, mut buf: Vec<u8>) -> Vec<u8> {
         for block in (1..(buf.len() / self.block_size)).step_by(2) {
             for offset in 0..self.block_size {
                 let cur = block * self.block_size;
@@ -144,7 +146,7 @@ impl Encoder for NeighbourBlockSwapper {
 
 #[test]
 fn test_neighbor_block_swapper_encode_even() {
-    let mut nswapper = NeighbourBlockSwapper { block_size: 3 };
+    let nswapper = NeighbourBlockSwapper { block_size: 3 };
 
     let mut buf = vec![1, 2, 3, 4, 5, 6];
     buf = nswapper.encode(buf);
@@ -154,7 +156,7 @@ fn test_neighbor_block_swapper_encode_even() {
 
 #[test]
 fn test_neighbor_block_swapper_decode_even() {
-    let mut nswapper = NeighbourBlockSwapper { block_size: 3 };
+    let nswapper = NeighbourBlockSwapper { block_size: 3 };
 
     let mut buf = vec![1, 2, 3, 4, 5, 6];
     buf = nswapper.encode(buf);
@@ -165,7 +167,7 @@ fn test_neighbor_block_swapper_decode_even() {
 
 #[test]
 fn test_neighbor_block_swapper_encode_odd() {
-    let mut nswapper = NeighbourBlockSwapper { block_size: 3 };
+    let nswapper = NeighbourBlockSwapper { block_size: 3 };
 
     let mut buf = vec![1, 2, 3, 4, 5, 6, 7, 8];
     buf = nswapper.encode(buf);
@@ -175,7 +177,7 @@ fn test_neighbor_block_swapper_encode_odd() {
 
 #[test]
 fn test_neighbor_block_swapper_decode_odd() {
-    let mut nswapper = NeighbourBlockSwapper { block_size: 3 };
+    let nswapper = NeighbourBlockSwapper { block_size: 3 };
 
     let mut buf = vec![1, 2, 3, 4, 5, 6, 7, 8];
     buf = nswapper.encode(buf);
@@ -195,7 +197,7 @@ impl From<Vec<u8>> for XorEncryptor {
 }
 
 impl Encoder for XorEncryptor {
-    fn encode(&mut self, mut buf: Vec<u8>) -> Vec<u8> {
+    fn encode(&self, mut buf: Vec<u8>) -> Vec<u8> {
         let key_len = self.key.len();
 
         for i in 0..buf.len() {
@@ -208,7 +210,7 @@ impl Encoder for XorEncryptor {
 
 #[test]
 fn test_xor_encode() {
-    let mut xor_encoder = XorEncryptor::from(vec![153, 22, 87, 44]);
+    let xor_encoder = XorEncryptor::from(vec![153, 22, 87, 44]);
     let mut buf = vec![1, 2, 3, 100, 12, 33, 0];
 
     buf = xor_encoder.encode(buf);
@@ -221,7 +223,7 @@ fn test_xor_encode() {
 
 #[test]
 fn test_xor_decode() {
-    let mut xor_encoder = XorEncryptor::from(vec![153, 22, 87, 44]);
+    let xor_encoder = XorEncryptor::from(vec![153, 22, 87, 44]);
     let mut buf = vec![1, 2, 3, 100, 12, 33, 0];
 
     buf = xor_encoder.encode(buf);
@@ -251,10 +253,10 @@ impl From<Vec<Box<dyn Encoder>>> for EncoderChain {
 }
 
 impl Encoder for EncoderChain {
-    fn encode(&mut self, buf: Vec<u8>) -> Vec<u8> {
+    fn encode(&self, buf: Vec<u8>) -> Vec<u8> {
         let mut buf: Vec<u8> = buf.to_vec();
 
-        for encoder in &mut self.chain {
+        for encoder in &self.chain {
             // println!("{:?}", buf);
             buf = encoder.encode(buf);
         }
@@ -262,10 +264,10 @@ impl Encoder for EncoderChain {
         buf
     }
 
-    fn decode(&mut self, buf: Vec<u8>) -> Vec<u8> {
+    fn decode(&self, buf: Vec<u8>) -> Vec<u8> {
         let mut buf: Vec<u8> = buf.to_vec();
 
-        for encoder in self.chain.iter_mut().rev() {
+        for encoder in self.chain.iter().rev() {
             // println!("{:?}", buf);
             buf = encoder.decode(buf);
         }
@@ -285,7 +287,7 @@ fn test_chain_reverser_extender_swapper_xor() {
         Box::new(ByteReverser {}),
         Box::new(XorEncryptor::from(vec![94, 29, 201, 124])),
     ];
-    let mut chain = EncoderChain::from(chain);
+    let chain = EncoderChain::from(chain);
 
     let mut buf = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     buf = chain.encode(buf);
