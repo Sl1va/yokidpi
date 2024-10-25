@@ -184,6 +184,52 @@ fn test_neighbor_block_swapper_decode_odd() {
     assert_eq!(buf, [1, 2, 3, 4, 5, 6, 7, 8]);
 }
 
+pub struct XorEncryptor {
+    key: Vec<u8>,
+}
+
+impl From<Vec<u8>> for XorEncryptor {
+    fn from(key: Vec<u8>) -> Self {
+        XorEncryptor { key }
+    }
+}
+
+impl Encoder for XorEncryptor {
+    fn encode(&mut self, mut buf: Vec<u8>) -> Vec<u8> {
+        let key_len = self.key.len();
+
+        for i in 0..buf.len() {
+            buf[i] ^= self.key[i % key_len];
+        }
+
+        buf
+    }
+}
+
+#[test]
+fn test_xor_encode() {
+    let mut xor_encoder = XorEncryptor::from(vec![153, 22, 87, 44]);
+    let mut buf = vec![1, 2, 3, 100, 12, 33, 0];
+
+    buf = xor_encoder.encode(buf);
+
+    assert_eq!(
+        buf,
+        [1 ^ 153, 2 ^ 22, 3 ^ 87, 100 ^ 44, 12 ^ 153, 33 ^ 22, 0 ^ 87]
+    );
+}
+
+#[test]
+fn test_xor_decode() {
+    let mut xor_encoder = XorEncryptor::from(vec![153, 22, 87, 44]);
+    let mut buf = vec![1, 2, 3, 100, 12, 33, 0];
+
+    buf = xor_encoder.encode(buf);
+    buf = xor_encoder.decode(buf);
+
+    assert_eq!(buf, [1, 2, 3, 100, 12, 33, 0]);
+}
+
 pub struct EncoderChain {
     chain: Vec<Box<dyn Encoder>>,
 }
@@ -229,14 +275,15 @@ impl Encoder for EncoderChain {
 }
 
 #[test]
-fn test_chain_reverser_extender_swapper() {
+fn test_chain_reverser_extender_swapper_xor() {
     let chain: Vec<Box<dyn Encoder>> = vec![
         Box::new(NeighbourBlockSwapper { block_size: 2 }),
         Box::new(ByteReverser {}),
         Box::new(SizeExtender::new(1.8)),
         Box::new(ByteReverser {}),
         Box::new(NeighbourBlockSwapper { block_size: 3 }),
-        Box::new(ByteReverser {}), 
+        Box::new(ByteReverser {}),
+        Box::new(XorEncryptor::from(vec![94, 29, 201, 124])),
     ];
     let mut chain = EncoderChain::from(chain);
 
