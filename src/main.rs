@@ -1,13 +1,48 @@
 mod encoder;
 mod gateway;
 
+use std::io::{empty, Error};
 use std::rc::Rc;
+use std::{default, env};
 
 use encoder::*;
-use gateway::Gateway;
 use mio::net::UdpSocket;
 use mio::{event, Events, Interest, Poll, Token};
 use std::net::SocketAddr;
+
+fn setup_client(server_addr: SocketAddr) -> std::io::Result<UdpSocket> {
+    // Initial garbage message to the server (to bypass DPI handshake detection)
+    let server_sock = UdpSocket::bind("0.0.0.0:0".parse().unwrap())?;
+    if let Err(err) = server_sock.connect(server_addr) {
+        return Err(err);
+    }
+
+    let garbage_gen = SizeExtender::new(64.0);
+    let mut payload = vec![0u8];
+    payload = garbage_gen.encode(payload);
+
+    if let Ok(n) = server_sock.send(&payload) {
+        println!(
+            "Successfully sent initial garbage message to {} ({} bytes)",
+            server_addr, n
+        );
+    } else {
+        return Err(Error::new(
+            std::io::ErrorKind::NotConnected,
+            "Failed to send initial garbage message",
+        ));
+    }
+
+    Ok(server_sock)
+}
+
+fn setup_server(local_serv_addr: SocketAddr) -> std::io::Result<UdpSocket>{
+    // Initial garbage message to the server (to bypass DPI handshake detection)
+    let server_sock = UdpSocket::bind("0.0.0.0:0".parse().unwrap())?;
+    server_sock.connect(local_serv_addr)?;
+
+    Ok(server_sock)
+}
 
 fn main() -> std::io::Result<()> {
     let encoder_chain: Vec<Box<dyn Encoder>> = vec![
@@ -21,28 +56,38 @@ fn main() -> std::io::Result<()> {
         Box::new(XorEncryptor::from(vec![94, 29, 201, 124])),
     ];
 
-    let encoder: Rc<Box<dyn Encoder>> = Rc::new(Box::new(EncoderChain::from(encoder_chain)));
-    let decoder: Rc<Box<dyn Encoder>> = Rc::new(Box::new(Decoder::new(encoder.clone())));
+    let mut encoder: Rc<Box<dyn Encoder>> = Rc::new(Box::new(EncoderChain::from(encoder_chain)));
 
-    // let local_conn = Rc::new(Gateway::new(decoder.clone()));
-    // let remote_conn = Rc::new(Gateway::new(encoder.clone()));
+    let args: Vec<String> = env::args().collect();
+    let mode = args.get(1).expect("Mode must be specified");
+    let addr = args.get(2).expect("Remote address must be specified");
+    let addr: SocketAddr = addr
+        .parse()
+        .expect("Remote: Wrong address format specified");
 
-    // create polling instances
-
-    // local_conn.init_async(remote_conn.clone());
-    // remote_conn.init_async(local_conn.clone());
+    let local_endpoint = args.get(3).expect("Listen address must be specified");
+    let local_endpoint: SocketAddr = local_endpoint
+        .parse()
+        .expect("Local: Wrong address format specified");
 
     let mut poll = Poll::new()?;
     let mut events = Events::with_capacity(128);
 
-    let local_addr: SocketAddr = "127.0.0.1:8383".parse().unwrap();
-    let remote_addr: SocketAddr = "127.0.0.1:8585".parse().unwrap();
+    let mut local_sock = UdpSocket::bind(local_endpoint).expect("Failed to bind local sock");
 
-    let mut local_sock = UdpSocket::bind(local_addr)?;
-    let mut remote_sock = UdpSocket::bind(remote_addr)?;
+    let mut remote_sock;
+    match mode.as_str() {
+        "client" => remote_sock = setup_client(addr).expect("Failed to initalize client socket"),
+        "server" => { 
+            // encoder = Rc::new(Box::new(Decoder::new(encoder)));
+            remote_sock = local_sock;
+            local_sock = setup_server(addr).expect("Failed to initalize client socket");
+        },
+        _ => panic!("Unknown runtime mode specified (available: client|server)"),
+    }
 
-    let mut local_client: Option<SocketAddr> = None;
-    let mut remote_client: Option<SocketAddr> = None;
+    // let mut local_client: Option<SocketAddr> = None;
+    // let mut remote_client: Option<SocketAddr> = None;
 
     poll.registry().register(
         &mut local_sock,
@@ -63,48 +108,38 @@ fn main() -> std::io::Result<()> {
                 Token(0) => {
                     let mut buf = [0; 1024];
                     if let Ok((n, _local_client)) = local_sock.recv_from(&mut buf) {
-                        let encoded = encoder.encode(buf[0..n].to_vec());
-                        local_client = Some(_local_client);
+                        let encoded = encoder.decode(buf[0..n].to_vec());
+                        println!("Received {} bytes on local socket", n);
 
-                        if let Some(conn) = remote_client {
-                            match remote_sock.send_to(&encoded, conn) {
-                                Ok(n) => println!(
-                                    "Successfully send {} bytes to remote sock ({:?})",
-                                    n, remote_client
-                                ),
-                                Err(err) => println!("Failed to send to remote sock: {:?}", err),
-                            }
+                        let _ = local_sock.connect(_local_client);
+                        if encoded.len() == 0 {
+                            println!("Local: encoded message is empty");
+                            continue;
                         }
 
-                        println!("Received {} bytes on local socket", n);
+                        match remote_sock.send(&encoded) {
+                            Ok(m) => println!("Successfully send {} bytes to remote sock", m),
+                            Err(err) => println!("Failed to send to remote sock: {:?}", err),
+                        }
                     }
                 }
 
                 Token(1) => {
                     let mut buf = [0; 1024];
                     if let Ok((n, _remote_client)) = remote_sock.recv_from(&mut buf) {
-                        remote_client = Some(_remote_client);
+                        let decoded = encoder.encode(buf[0..n].to_vec());
+                        println!("Received {} bytes on remote socket", n);
 
-                        if &buf[0..2] == b"hi" {
-                            println!("Initialized remote connection");
+                        let _ = remote_sock.connect(_remote_client);
+                        if decoded.len() == 0 {
+                            println!("Remote: decoded message is empty");
                             continue;
                         }
 
-                        let decoded = decoder.decode(buf[0..n].to_vec());
-
-                        if let Some(conn) = local_client {
-                            match local_sock.send_to(&decoded, conn) {
-                                Ok(n) => {
-                                    println!(
-                                        "Successfully send {} bytes to local sock ({:?})",
-                                        n, local_client
-                                    )
-                                }
-                                Err(err) => println!("Failed to send to local sock: {:?}", err),
-                            }
+                        match local_sock.send(&decoded) {
+                            Ok(m) => println!("Successfully send {} bytes to local sock", m),
+                            Err(err) => println!("Failed to send to local sock: {:?}", err),
                         }
-
-                        println!("Received {} bytes on remote socket", n);
                     }
                 }
                 _ => unreachable!(),

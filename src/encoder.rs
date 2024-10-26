@@ -25,6 +25,10 @@ impl Encoder for Decoder {
     fn encode(&self, buf: Vec<u8>) -> Vec<u8> {
         self.encoder.decode(buf)
     }
+
+    fn decode(&self, buf: Vec<u8>) -> Vec<u8> {
+        self.encoder.encode(buf)
+    }
 }
 
 pub struct ByteReverser {}
