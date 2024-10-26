@@ -152,7 +152,7 @@ pub struct NeighbourBlockSwapper {
 
 impl NeighbourBlockSwapper {
     pub fn new(block_size: usize) -> Self {
-        Self {block_size}
+        Self { block_size }
     }
 }
 
@@ -256,6 +256,108 @@ fn test_xor_decode() {
     buf = xor_encoder.decode(buf);
 
     assert_eq!(buf, [1, 2, 3, 100, 12, 33, 0]);
+}
+
+struct PacketVerifier {}
+
+impl PacketVerifier {}
+
+impl PacketVerifier {
+    fn control_sum(buf: &[u8]) -> Vec<u8> {
+        let mut csum = vec![0u8; 16];
+
+        for i in 0..buf.len() {
+            csum[i % 16] = csum[i % 16].wrapping_add(buf[i]);
+        }
+
+        csum
+    }
+}
+
+impl Encoder for PacketVerifier {
+    fn encode(&self, mut buf: Vec<u8>) -> Vec<u8> {
+        let csum = Self::control_sum(&buf);
+        buf.extend(csum);
+        buf
+    }
+
+    fn decode(&self, mut buf: Vec<u8>) -> Vec<u8> {
+        let n = buf.len();
+
+        if n < 16 {
+            buf.clear();
+            return buf;
+        }
+
+        let csum_got = &buf[(n - 16)..n];
+        let csum = Self::control_sum(&buf[0..n - 16]);
+
+        if csum_got == csum {
+            buf.truncate(buf.len() - 16);
+        } else {
+            buf.clear();
+        }
+
+        buf
+    }
+}
+
+#[test]
+fn test_packet_verifier_encode() {
+    let verifier = PacketVerifier {};
+    let mut buf = vec![
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 255, 254, 253, 252, 251, 250, 249,
+        248, 10, 10, 10, 10, 10, 10, 10, 10,
+    ];
+
+    buf = verifier.encode(buf);
+
+    assert_eq!(buf.len(), 48);
+    assert_eq!(
+        &buf[buf.len() - 16..buf.len()],
+        [0, 0, 0, 0, 0, 0, 0, 0, 19, 20, 21, 22, 23, 24, 25, 26]
+    );
+}
+
+#[test]
+fn test_packet_verifier_decode() {
+    let verifier = PacketVerifier {};
+    let mut buf = vec![
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 255, 254, 253, 252, 251, 250, 249,
+        248, 10, 10, 10, 10, 10, 10, 10, 10,
+    ];
+
+    buf = verifier.encode(buf);
+    buf = verifier.decode(buf);
+
+    assert_eq!(buf.len(), 32);
+    assert_eq!(
+        buf,
+        [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 255, 254, 253, 252, 251, 250,
+            249, 248, 10, 10, 10, 10, 10, 10, 10, 10,
+        ]
+    )
+}
+
+#[test]
+fn test_packet_verifier_fail_too_short() {
+    let verifier = PacketVerifier {};
+    let mut buf = vec![1, 2, 3, 4, 5, 6, 7, 8];
+    buf = verifier.decode(buf);
+
+    assert_eq!(buf.len(), 0)
+}
+
+#[test]
+fn test_packet_verifier_fail_wrong_sum() {
+    let verifier = PacketVerifier {};
+    let mut buf = vec![
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 255, 254, 253, 252, 251, 250, 249,
+        248, 10, 10, 10, 10, 10, 10, 10, 10,
+    ];
+    buf = verifier.decode(buf);
+    assert_eq!(buf.len(), 0)
 }
 
 pub struct EncoderChain {
