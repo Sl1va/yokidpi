@@ -108,7 +108,7 @@ fn main() -> std::io::Result<()> {
                 Token(0) => {
                     let mut buf = [0; 1024];
                     if let Ok((n, _local_client)) = local_sock.recv_from(&mut buf) {
-                        let encoded = encoder.decode(buf[0..n].to_vec());
+                        let encoded = encoder.encode(buf[0..n].to_vec());
                         println!("Received {} bytes on local socket", n);
 
                         let _ = local_sock.connect(_local_client);
@@ -127,7 +127,7 @@ fn main() -> std::io::Result<()> {
                 Token(1) => {
                     let mut buf = [0; 1024];
                     if let Ok((n, _remote_client)) = remote_sock.recv_from(&mut buf) {
-                        let decoded = encoder.encode(buf[0..n].to_vec());
+                        let decoded = encoder.decode(buf[0..n].to_vec());
                         println!("Received {} bytes on remote socket", n);
 
                         let _ = remote_sock.connect(_remote_client);
