@@ -258,7 +258,7 @@ fn test_xor_decode() {
     assert_eq!(buf, [1, 2, 3, 100, 12, 33, 0]);
 }
 
-struct PacketVerifier {}
+pub struct PacketVerifier {}
 
 impl PacketVerifier {}
 
@@ -398,6 +398,12 @@ impl Encoder for EncoderChain {
         for encoder in self.chain.iter().rev() {
             // println!("{:?}", buf);
             buf = encoder.decode(buf);
+
+            if buf.len() == 0 {
+                // No further processing is needed, the packet
+                // is marked as corrupted (free buffer)
+                return buf
+            }
         }
 
         buf

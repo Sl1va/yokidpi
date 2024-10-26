@@ -17,6 +17,7 @@ fn main() -> std::io::Result<()> {
         Box::new(ByteReverser {}),
         Box::new(NeighbourBlockSwapper::new(3)),
         Box::new(ByteReverser {}),
+        Box::new(PacketVerifier {}),
         Box::new(XorEncryptor::from(vec![94, 29, 201, 124])),
     ];
 
@@ -67,9 +68,9 @@ fn main() -> std::io::Result<()> {
 
                         if let Some(conn) = remote_client {
                             match remote_sock.send_to(&encoded, conn) {
-                                Ok(_) => println!(
-                                    "Successfully send to remote sock ({:?})",
-                                    remote_client
+                                Ok(n) => println!(
+                                    "Successfully send {} bytes to remote sock ({:?})",
+                                    n, remote_client
                                 ),
                                 Err(err) => println!("Failed to send to remote sock: {:?}", err),
                             }
@@ -93,8 +94,11 @@ fn main() -> std::io::Result<()> {
 
                         if let Some(conn) = local_client {
                             match local_sock.send_to(&decoded, conn) {
-                                Ok(_) => {
-                                    println!("Successfully send to local sock ({:?})", local_client)
+                                Ok(n) => {
+                                    println!(
+                                        "Successfully send {} bytes to local sock ({:?})",
+                                        n, local_client
+                                    )
                                 }
                                 Err(err) => println!("Failed to send to local sock: {:?}", err),
                             }
