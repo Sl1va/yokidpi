@@ -139,7 +139,7 @@ fn main() -> std::io::Result<()> {
     let encoder_chain: Vec<Box<dyn Encoder>> = vec![
         Box::new(NeighbourBlockSwapper::new(2)),
         Box::new(ByteReverser {}),
-        Box::new(SizeExtender::new(1.8)),
+        Box::new(SizeExtender::new(1.1)),
         Box::new(ByteReverser {}),
         Box::new(NeighbourBlockSwapper::new(3)),
         Box::new(ByteReverser {}),
@@ -221,12 +221,22 @@ fn main() -> std::io::Result<()> {
                             continue;
                         }
 
-                        if let Ok(m) = encoded_gateway.send(&buf) {
-                            println!(
-                                "Sent encoded message to {} ({} bytes)",
-                                encoded_gateway.peer_addr().unwrap(),
-                                m
-                            );
+                        match encoded_gateway.send(&buf) {
+                            Ok(m) => {
+                                println!(
+                                    "Sent encoded message to {} ({} bytes)",
+                                    encoded_gateway.peer_addr().unwrap(),
+                                    m
+                                );
+                            }
+
+                            Err(err) => {
+                                println!(
+                                    "Failed to send encoded message to {} ({})",
+                                    encoded_gateway.peer_addr().unwrap(),
+                                    err
+                                );
+                            }
                         }
                     }
                 }
@@ -244,12 +254,22 @@ fn main() -> std::io::Result<()> {
                             continue;
                         }
 
-                        if let Ok(m) = decoded_gateway.send(&buf) {
-                            println!(
-                                "Sent decoded message to {} ({} bytes)",
-                                decoded_gateway.peer_addr().unwrap(),
-                                m
-                            );
+                        match decoded_gateway.send(&buf) {
+                            Ok(m) => {
+                                println!(
+                                    "Sent decoded message to {} ({} bytes)",
+                                    decoded_gateway.peer_addr().unwrap(),
+                                    m
+                                );
+                            }
+
+                            Err(err) => {
+                                println!(
+                                    "Failed to send encoded message to {} ({})",
+                                    decoded_gateway.peer_addr().unwrap(),
+                                    err
+                                );
+                            }
                         }
                     }
                 }
