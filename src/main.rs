@@ -1,47 +1,138 @@
 mod encoder;
 mod gateway;
 
-use std::io::{empty, Error};
-use std::rc::Rc;
-use std::{default, env};
+use std::time::Duration;
+use std::{env, io, thread};
 
 use encoder::*;
 use mio::net::UdpSocket;
-use mio::{event, Events, Interest, Poll, Token};
+use mio::{Events, Interest, Poll, Token};
 use std::net::SocketAddr;
 
-fn setup_client(server_addr: SocketAddr) -> std::io::Result<UdpSocket> {
-    // Initial garbage message to the server (to bypass DPI handshake detection)
-    let server_sock = UdpSocket::bind("0.0.0.0:0".parse().unwrap())?;
-    if let Err(err) = server_sock.connect(server_addr) {
-        return Err(err);
+fn prepare_client(
+    encoded_addr: SocketAddr,
+    decoded_addr: SocketAddr,
+    encoder: &Box<dyn Encoder>,
+) -> std::io::Result<(UdpSocket, UdpSocket)> {
+    // In client mode, decoded gateway is connection to local client (listen to it).
+    // Encoded gateway is connection to remote server (connect to it).
+
+    // As a result - decoded gateway is not associated with any clients,
+    // it only listens from the  fixed addres
+    let decoded_gateway = UdpSocket::bind(decoded_addr)?;
+
+    // Wait till the first client and associate decoded gateway with it
+    // (Message will be dropped, but it should be OK due to UDP nature)
+    let mut buf = vec![0u8; 1024];
+    let local_client: SocketAddr;
+
+    loop {
+        match decoded_gateway.recv_from(&mut buf) {
+            Ok((_, addr)) => {
+                local_client = addr;
+                break;
+            }
+
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // Do some busy waiting on non-blocking socket
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    "Failed to establish connection with local client",
+                ));
+            }
+        }
     }
 
-    let garbage_gen = SizeExtender::new(64.0);
-    let mut payload = vec![0u8];
-    payload = garbage_gen.encode(payload);
+    // Finally, associate local decoder with local client
+    decoded_gateway.connect(local_client)?;
+    println!(
+        "Successfully established connection with local client {}",
+        local_client
+    );
 
-    if let Ok(n) = server_sock.send(&payload) {
-        println!(
-            "Successfully sent initial garbage message to {} ({} bytes)",
-            server_addr, n
-        );
-    } else {
-        return Err(Error::new(
-            std::io::ErrorKind::NotConnected,
-            "Failed to send initial garbage message",
+    // Meanwhile encoded gateway is explicitly associated with remote socket
+    // (we can let the system to set local credentials)
+    let encoded_gateway = UdpSocket::bind("0.0.0.0:0".parse().unwrap())?;
+    encoded_gateway.connect(encoded_addr)?;
+
+    // Send HELLO message to the server in order to immediatelly create association for server
+    let enc_msg = encoder.encode("HELLO FROM YOKI CLIENT".as_bytes().to_vec());
+
+    match encoded_gateway.send(&enc_msg) {
+        Ok(n) => {
+            println!("Successfully sent HELLO message to server ({} bytes)", n);
+            Ok((encoded_gateway, decoded_gateway))
+        }
+        Err(_) => Err(std::io::Error::new(
+            std::io::ErrorKind::ConnectionAborted,
+            "Failed to send HELLO message",
+        )),
+    }
+}
+
+fn prepare_server(
+    encoded_addr: SocketAddr,
+    decoded_addr: SocketAddr,
+    encoder: &Box<dyn Encoder>,
+) -> std::io::Result<(UdpSocket, UdpSocket)> {
+    // In server mode, decoded gateway is connection to local server (connect to it).
+    // Encoded gateway is connection to remote client (listen to it)
+
+    // As a result, decoded gateway is explicitly associated with local server
+    let decoded_gateway = UdpSocket::bind("0.0.0.0:0".parse().unwrap())?;
+    decoded_gateway.connect(decoded_addr)?;
+
+    // Meanwhile encoded gateway just listens the specified port for incoming connections
+    let encoded_gateway = UdpSocket::bind(encoded_addr)?;
+
+    // Client will send HELLO message for immediate association
+    let mut buf = vec![0u8; 1024];
+
+    // Message is blocking, therefore use busy waiting
+    let remote_addr: SocketAddr;
+    loop {
+        match encoded_gateway.recv_from(&mut buf) {
+            Ok((n, addr)) => {
+                buf = encoder.decode(buf[0..n].to_vec());
+                remote_addr = addr;
+                break;
+            }
+
+            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                // Do some busy waiting on non-blocking socket
+                thread::sleep(Duration::from_millis(100));
+                continue;
+            }
+
+            Err(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionAborted,
+                    "Failed to receive HELLO message",
+                ));
+            }
+        }
+    }
+
+    if buf != "HELLO FROM YOKI CLIENT".as_bytes().to_vec() {
+        return Err(std::io::Error::new(
+            io::ErrorKind::InvalidData,
+            "HELLO message is corrupted",
         ));
     }
 
-    Ok(server_sock)
-}
+    // Finally, associate encoded gateway with remote client
+    encoded_gateway.connect(remote_addr)?;
+    println!(
+        "Successfuly associated encoded gateway with {}",
+        remote_addr
+    );
 
-fn setup_server(local_serv_addr: SocketAddr) -> std::io::Result<UdpSocket>{
-    // Initial garbage message to the server (to bypass DPI handshake detection)
-    let server_sock = UdpSocket::bind("0.0.0.0:0".parse().unwrap())?;
-    server_sock.connect(local_serv_addr)?;
-
-    Ok(server_sock)
+    Ok((encoded_gateway, decoded_gateway))
 }
 
 fn main() -> std::io::Result<()> {
@@ -56,46 +147,57 @@ fn main() -> std::io::Result<()> {
         Box::new(XorEncryptor::from(vec![94, 29, 201, 124])),
     ];
 
-    let mut encoder: Rc<Box<dyn Encoder>> = Rc::new(Box::new(EncoderChain::from(encoder_chain)));
+    let encoder: Box<dyn Encoder> = Box::new(EncoderChain::from(encoder_chain));
 
     let args: Vec<String> = env::args().collect();
     let mode = args.get(1).expect("Mode must be specified");
-    let addr = args.get(2).expect("Remote address must be specified");
-    let addr: SocketAddr = addr
-        .parse()
-        .expect("Remote: Wrong address format specified");
 
-    let local_endpoint = args.get(3).expect("Listen address must be specified");
-    let local_endpoint: SocketAddr = local_endpoint
-        .parse()
-        .expect("Local: Wrong address format specified");
+    // Encoded gateway - accepts **encoded** traffic for further processing
+    let encoded_gateway_addr = args.get(2).expect("Encoded gateway must be specified");
 
+    // Decoded gateway - accept **not encoded** traffic for futher processing
+    let decoded_gateway_addr = args.get(3).expect("Decoded gateway must be specified");
+
+    // Transform gateways into socket addresses
+    let encoded_gateway_addr: SocketAddr = encoded_gateway_addr
+        .parse()
+        .expect("Wrong format for encoded gateway");
+    let decoded_gateway_addr: SocketAddr = decoded_gateway_addr
+        .parse()
+        .expect("Wrong format for decoded gateway");
+
+    let mut encoded_gateway: UdpSocket;
+    let mut decoded_gateway: UdpSocket;
+
+    match mode.as_str() {
+        "client" => {
+            (encoded_gateway, decoded_gateway) =
+                prepare_client(encoded_gateway_addr, decoded_gateway_addr, &encoder)
+                    .expect("Failed to initialize client");
+        }
+
+        "server" => {
+            (encoded_gateway, decoded_gateway) =
+                prepare_server(encoded_gateway_addr, decoded_gateway_addr, &encoder)
+                    .expect("Failed to initialize server");
+        }
+
+        _ => {
+            panic!("Mode \"{}\" not supported", mode);
+        }
+    }
+
+    // Register polling events
     let mut poll = Poll::new()?;
     let mut events = Events::with_capacity(128);
 
-    let mut local_sock = UdpSocket::bind(local_endpoint).expect("Failed to bind local sock");
-
-    let mut remote_sock;
-    match mode.as_str() {
-        "client" => remote_sock = setup_client(addr).expect("Failed to initalize client socket"),
-        "server" => { 
-            // encoder = Rc::new(Box::new(Decoder::new(encoder)));
-            remote_sock = local_sock;
-            local_sock = setup_server(addr).expect("Failed to initalize client socket");
-        },
-        _ => panic!("Unknown runtime mode specified (available: client|server)"),
-    }
-
-    // let mut local_client: Option<SocketAddr> = None;
-    // let mut remote_client: Option<SocketAddr> = None;
-
     poll.registry().register(
-        &mut local_sock,
+        &mut decoded_gateway,
         Token(0),
         Interest::READABLE.add(Interest::WRITABLE),
     )?;
     poll.registry().register(
-        &mut remote_sock,
+        &mut encoded_gateway,
         Token(1),
         Interest::READABLE.add(Interest::WRITABLE),
     )?;
@@ -103,45 +205,55 @@ fn main() -> std::io::Result<()> {
     loop {
         poll.poll(&mut events, None)?;
 
+        let mut buf = vec![0u8; 1024];
         for event in events.iter() {
             match event.token() {
                 Token(0) => {
-                    let mut buf = [0; 1024];
-                    if let Ok((n, _local_client)) = local_sock.recv_from(&mut buf) {
-                        let encoded = encoder.encode(buf[0..n].to_vec());
-                        println!("Received {} bytes on local socket", n);
+                    // Raw (decoded) traffic comes here
 
-                        let _ = local_sock.connect(_local_client);
-                        if encoded.len() == 0 {
-                            println!("Local: encoded message is empty");
+                    if let Ok((n, addr)) = decoded_gateway.recv_from(&mut buf) {
+                        // Encode data and send to encoder client
+                        println!("Received decoded message from {} ({} bytes)", addr, n);
+                        buf = encoder.encode(buf[0..n].to_vec());
+
+                        // do not transfer empty messages
+                        if buf.len() == 0 {
                             continue;
                         }
 
-                        match remote_sock.send(&encoded) {
-                            Ok(m) => println!("Successfully send {} bytes to remote sock", m),
-                            Err(err) => println!("Failed to send to remote sock: {:?}", err),
+                        if let Ok(m) = encoded_gateway.send(&buf) {
+                            println!(
+                                "Sent encoded message to {} ({} bytes)",
+                                encoded_gateway.peer_addr().unwrap(),
+                                m
+                            );
                         }
                     }
                 }
 
                 Token(1) => {
-                    let mut buf = [0; 1024];
-                    if let Ok((n, _remote_client)) = remote_sock.recv_from(&mut buf) {
-                        let decoded = encoder.decode(buf[0..n].to_vec());
-                        println!("Received {} bytes on remote socket", n);
+                    // Encoded traffic comes here
 
-                        let _ = remote_sock.connect(_remote_client);
-                        if decoded.len() == 0 {
-                            println!("Remote: decoded message is empty");
+                    if let Ok((n, addr)) = encoded_gateway.recv_from(&mut buf) {
+                        // Decode data and send to decoder client
+                        println!("Received encoded message from {} ({} bytes)", addr, n);
+                        buf = encoder.decode(buf[0..n].to_vec());
+
+                        // do not transfer empty messages
+                        if buf.len() == 0 {
                             continue;
                         }
 
-                        match local_sock.send(&decoded) {
-                            Ok(m) => println!("Successfully send {} bytes to local sock", m),
-                            Err(err) => println!("Failed to send to local sock: {:?}", err),
+                        if let Ok(m) = decoded_gateway.send(&buf) {
+                            println!(
+                                "Sent decoded message to {} ({} bytes)",
+                                decoded_gateway.peer_addr().unwrap(),
+                                m
+                            );
                         }
                     }
                 }
+
                 _ => unreachable!(),
             }
         }
