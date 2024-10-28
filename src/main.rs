@@ -194,12 +194,12 @@ fn main() -> std::io::Result<()> {
     poll.registry().register(
         &mut decoded_gateway,
         Token(0),
-        Interest::READABLE.add(Interest::WRITABLE),
+        Interest::READABLE,
     )?;
     poll.registry().register(
         &mut encoded_gateway,
         Token(1),
-        Interest::READABLE.add(Interest::WRITABLE),
+        Interest::READABLE,
     )?;
 
     loop {
