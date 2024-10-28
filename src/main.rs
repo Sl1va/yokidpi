@@ -219,6 +219,7 @@ fn main() -> std::io::Result<()> {
                             continue;
                         }
 
+                        thread::sleep(Duration::from_millis(100));
                         match encoded_gateway.send(&buf) {
                             Ok(m) => {
                                 println!(
