@@ -191,16 +191,13 @@ fn main() -> std::io::Result<()> {
     let mut poll = Poll::new()?;
     let mut events = Events::with_capacity(128);
 
-    poll.registry().register(
-        &mut decoded_gateway,
-        Token(0),
-        Interest::READABLE,
-    )?;
-    poll.registry().register(
-        &mut encoded_gateway,
-        Token(1),
-        Interest::READABLE,
-    )?;
+    poll.registry()
+        .register(&mut decoded_gateway, Token(0), Interest::READABLE)?;
+    poll.registry()
+        .register(&mut encoded_gateway, Token(1), Interest::READABLE)?;
+
+    let mut encoded_counter = 0u32;
+    let mut decoded_counter = 0u32;
 
     loop {
         poll.poll(&mut events, None)?;
@@ -213,7 +210,8 @@ fn main() -> std::io::Result<()> {
 
                     if let Ok((n, addr)) = decoded_gateway.recv_from(&mut buf) {
                         // Encode data and send to encoder client
-                        println!("Received decoded message from {} ({} bytes)", addr, n);
+                        decoded_counter += 1;
+                        println!("[{}] Received decoded message from {} ({} bytes)", decoded_counter, addr, n);
                         buf = encoder.encode(buf[0..n].to_vec());
 
                         // do not transfer empty messages
@@ -246,7 +244,8 @@ fn main() -> std::io::Result<()> {
 
                     if let Ok((n, addr)) = encoded_gateway.recv_from(&mut buf) {
                         // Decode data and send to decoder client
-                        println!("Received encoded message from {} ({} bytes)", addr, n);
+                        encoded_counter += 1;
+                        println!("[{}] Received encoded message from {} ({} bytes)", encoded_counter, addr, n);
                         buf = encoder.decode(buf[0..n].to_vec());
 
                         // do not transfer empty messages
