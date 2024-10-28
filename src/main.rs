@@ -1,7 +1,7 @@
 mod encoder;
 mod gateway;
 
-use std::io::{Read, Write};
+use std::io::{Error, Read, Write};
 use std::time::Duration;
 use std::{env, thread};
 
@@ -158,22 +158,38 @@ fn main() -> std::io::Result<()> {
 
     poll.registry()
         .register(&mut decoded_gateway, Token(0), Interest::READABLE)?;
-    poll.registry()
-        .register(&mut encoded_gateway, Token(1), Interest::READABLE)?;
+    poll.registry().register(
+        &mut encoded_gateway,
+        Token(1),
+        Interest::READABLE.add(Interest::WRITABLE),
+    )?;
 
     let mut encoded_counter = 0u32;
     let mut decoded_counter = 0u32;
+    let mut encoded_writable = false;
 
     loop {
         poll.poll(&mut events, None)?;
 
         let mut buf = vec![0u8; 1024];
         for event in events.iter() {
+            if event.is_error() {
+                return Err(Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "Error event on socket occured",
+                ));
+            }
+
             match event.token() {
                 Token(0) => {
-                    // Raw (decoded) traffic comes here
+                    if !encoded_writable {
+                        println!("Encoded gateway is not ready yet!");
+                        continue;
+                    }
 
+                    // Raw (decoded) traffic comes here
                     if let Ok((n, addr)) = decoded_gateway.recv_from(&mut buf) {
+                        println!("{:?}", buf[0..n].to_ascii_lowercase());
                         // Encode data and send to encoder client
                         decoded_counter += 1;
                         println!(
@@ -201,10 +217,17 @@ fn main() -> std::io::Result<()> {
                             }
                         }
                     }
+
+                    encoded_writable = false;
                 }
 
                 Token(1) => {
                     // Encoded traffic comes here
+
+                    if event.is_writable() {
+                        encoded_writable = true;
+                        continue;
+                    }
 
                     if let Ok(n) = encoded_gateway.read(&mut buf) {
                         // Decode data and send to decoder client
