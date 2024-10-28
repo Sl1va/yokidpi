@@ -57,6 +57,7 @@ fn prepare_client(
 
     // TODO: Documentation
     let encoded_gateway = TcpStreamStd::connect(encoded_addr)?;
+    encoded_gateway.set_nonblocking(true)?;
 
     Ok((TcpStream::from_std(encoded_gateway), decoded_gateway))
 }
@@ -78,6 +79,7 @@ fn prepare_server(
     match encoded_listener.accept() {
         Ok((encoded_gateway, _)) => {
             println!("Successfully accepted connection from client");
+            encoded_gateway.set_nonblocking(true)?;
             return Ok((TcpStream::from_std(encoded_gateway), decoded_gateway));
         }
 
@@ -185,12 +187,12 @@ fn main() -> std::io::Result<()> {
                             continue;
                         }
 
-                        match encoded_gateway.write(&buf) {
-                            Ok(m) => {
+                        match encoded_gateway.write_all(&buf) {
+                            Ok(()) => {
                                 println!(
                                     "Sent encoded message to {} ({} bytes)",
                                     encoded_gateway.peer_addr().unwrap(),
-                                    m
+                                    buf.len(),
                                 );
                             }
 
