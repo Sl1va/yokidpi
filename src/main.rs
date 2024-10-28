@@ -142,6 +142,14 @@ fn main() -> std::io::Result<()> {
         }
     }
 
+    match encoded_gateway.set_nodelay(true) {
+        Err(_) => {
+            println!("Failed to SET_NODELAY");
+        }
+
+        _ => {}
+    }
+
     // Register polling events
     let mut poll = Poll::new()?;
     let mut events = Events::with_capacity(128);
