@@ -78,7 +78,7 @@ fn prepare_server(
     match encoded_listener.accept() {
         Ok((encoded_gateway, _)) => {
             println!("Successfully accepted connection from client");
-            return Ok((TcpStream::from_std(encoded_gateway), decoded_gateway))
+            return Ok((TcpStream::from_std(encoded_gateway), decoded_gateway));
         }
 
         Err(_) => {
@@ -188,11 +188,7 @@ fn main() -> std::io::Result<()> {
                             }
 
                             Err(err) => {
-                                println!(
-                                    "Failed to send encoded message to {} ({})",
-                                    encoded_gateway.peer_addr().unwrap(),
-                                    err
-                                );
+                                println!("Failed to send encoded message ({})", err);
                             }
                         }
                     }
@@ -201,7 +197,7 @@ fn main() -> std::io::Result<()> {
                 Token(1) => {
                     // Encoded traffic comes here
 
-                    if let Ok((n)) = encoded_gateway.read(&mut buf) {
+                    if let Ok(n) = encoded_gateway.read(&mut buf) {
                         // Decode data and send to decoder client
                         encoded_counter += 1;
                         println!(
