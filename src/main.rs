@@ -191,27 +191,51 @@ fn main() -> std::io::Result<()> {
     let mut poll = Poll::new()?;
     let mut events = Events::with_capacity(128);
 
-    poll.registry()
-        .register(&mut decoded_gateway, Token(0), Interest::READABLE)?;
-    poll.registry()
-        .register(&mut encoded_gateway, Token(1), Interest::READABLE)?;
+    poll.registry().register(
+        &mut decoded_gateway,
+        Token(0),
+        Interest::READABLE.add(Interest::WRITABLE),
+    )?;
+    poll.registry().register(
+        &mut encoded_gateway,
+        Token(1),
+        Interest::READABLE.add(Interest::WRITABLE),
+    )?;
 
     let mut encoded_counter = 0u32;
     let mut decoded_counter = 0u32;
+
+    let mut encoded_ready = false;
+    let mut decoded_ready = false;
 
     loop {
         poll.poll(&mut events, None)?;
 
         let mut buf = vec![0u8; 1024];
         for event in events.iter() {
+            if event.is_error() {
+                panic!("Error occured on event");
+            }
+
             match event.token() {
                 Token(0) => {
                     // Raw (decoded) traffic comes here
+                    if event.is_writable() {
+                        decoded_ready = true;
+                    }
+
+                    if !event.is_readable() || !encoded_ready {
+                        println!("Encoded is not ready yet");
+                        continue;
+                    }
 
                     if let Ok((n, addr)) = decoded_gateway.recv_from(&mut buf) {
                         // Encode data and send to encoder client
                         decoded_counter += 1;
-                        println!("[{}] Received decoded message from {} ({} bytes)", decoded_counter, addr, n);
+                        println!(
+                            "[{}] Received decoded message from {} ({} bytes)",
+                            decoded_counter, addr, n
+                        );
                         buf = encoder.encode(buf[0..n].to_vec());
 
                         // do not transfer empty messages
@@ -238,15 +262,27 @@ fn main() -> std::io::Result<()> {
                             }
                         }
                     }
+                    encoded_ready = false;
                 }
 
                 Token(1) => {
                     // Encoded traffic comes here
+                    if event.is_writable() {
+                        encoded_ready = true;
+                    }
+
+                    if !event.is_readable() || !decoded_ready {
+                        println!("Decoded is not ready yet");
+                        continue;
+                    }
 
                     if let Ok((n, addr)) = encoded_gateway.recv_from(&mut buf) {
                         // Decode data and send to decoder client
                         encoded_counter += 1;
-                        println!("[{}] Received encoded message from {} ({} bytes)", encoded_counter, addr, n);
+                        println!(
+                            "[{}] Received encoded message from {} ({} bytes)",
+                            encoded_counter, addr, n
+                        );
                         buf = encoder.decode(buf[0..n].to_vec());
 
                         // do not transfer empty messages
@@ -272,6 +308,7 @@ fn main() -> std::io::Result<()> {
                             }
                         }
                     }
+                    decoded_ready = false;
                 }
 
                 _ => unreachable!(),
