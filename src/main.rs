@@ -191,22 +191,13 @@ fn main() -> std::io::Result<()> {
     let mut poll = Poll::new()?;
     let mut events = Events::with_capacity(128);
 
-    poll.registry().register(
-        &mut decoded_gateway,
-        Token(0),
-        Interest::READABLE.add(Interest::WRITABLE),
-    )?;
-    poll.registry().register(
-        &mut encoded_gateway,
-        Token(1),
-        Interest::READABLE.add(Interest::WRITABLE),
-    )?;
+    poll.registry()
+        .register(&mut decoded_gateway, Token(0), Interest::READABLE)?;
+    poll.registry()
+        .register(&mut encoded_gateway, Token(1), Interest::READABLE)?;
 
     let mut encoded_counter = 0u32;
     let mut decoded_counter = 0u32;
-
-    let mut encoded_ready = false;
-    let mut decoded_ready = false;
 
     loop {
         poll.poll(&mut events, None)?;
@@ -220,12 +211,8 @@ fn main() -> std::io::Result<()> {
             match event.token() {
                 Token(0) => {
                     // Raw (decoded) traffic comes here
-                    if event.is_writable() {
-                        decoded_ready = true;
-                    }
-
-                    if !event.is_readable() || !encoded_ready {
-                        println!("Encoded is not ready yet");
+                    if !event.is_readable() {
+                        println!("Decoded gateway is not ready to be read");
                         continue;
                     }
 
@@ -262,17 +249,12 @@ fn main() -> std::io::Result<()> {
                             }
                         }
                     }
-                    encoded_ready = false;
                 }
 
                 Token(1) => {
                     // Encoded traffic comes here
-                    if event.is_writable() {
-                        encoded_ready = true;
-                    }
-
-                    if !event.is_readable() || !decoded_ready {
-                        println!("Decoded is not ready yet");
+                    if !event.is_readable() {
+                        println!("Encoded gateway is not ready to be read");
                         continue;
                     }
 
@@ -308,7 +290,6 @@ fn main() -> std::io::Result<()> {
                             }
                         }
                     }
-                    decoded_ready = false;
                 }
 
                 _ => unreachable!(),
